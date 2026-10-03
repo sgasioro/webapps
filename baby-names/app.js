@@ -3,8 +3,8 @@
 
   const STORAGE_KEY = 'babyNameRanker.v1';
   const POOL_SIZES = [8, 16, 24, 32];
-  // Share of each round that finishes on top (carried forward) or bottom (retired).
-  const QUARTER = 0.25;
+  // How many of each round's names get put in order.
+  const TOP_SIZES = [3, 5, 8];
   // Share of a new round reserved for past favorites.
   const FAVORITE_SHARE = 1 / 3;
 
@@ -24,12 +24,17 @@
     try {
       const raw = JSON.parse(localStorage.getItem(STORAGE_KEY));
       if (raw && raw.data) {
-        raw.data.boy = { ...emptyGenderData(), ...raw.data.boy };
-        raw.data.girl = { ...emptyGenderData(), ...raw.data.girl };
+        raw.topK = raw.topK || 5;
+        for (const gender of ['boy', 'girl']) {
+          const g = raw.data[gender] = { ...emptyGenderData(), ...raw.data[gender] };
+          // Rounds saved by the older full-sort version restart with the same names.
+          if (g.session && !Array.isArray(g.session.picks)) g.session = { pool: g.session.pool, picks: [], k: raw.topK };
+          if (g.lastResult && !g.lastResult.top) g.lastResult = null;
+        }
         return raw;
       }
     } catch (e) { /* fall through to a fresh store */ }
-    return { gender: 'girl', poolSize: 16, data: { boy: emptyGenderData(), girl: emptyGenderData() } };
+    return { gender: 'girl', poolSize: 16, topK: 5, data: { boy: emptyGenderData(), girl: emptyGenderData() } };
   }
 
   function save() {
@@ -113,49 +118,26 @@
   function startRound() {
     const pool = buildPool(db.poolSize);
     if (pool.length < 2) { alert('Not enough active names left. Restore some retired names or add your own.'); return; }
-    // Bottom-up merge sort driven by the user's picks. Each run is sorted best-first.
-    gd().session = { pool, queue: pool.map(n => [n]), a: [], b: [], out: [], done: 0, undo: [] };
-    advance(gd().session);
+    // See round.js for how matchups are chosen; picks are [winner, loser] pairs.
+    gd().session = { pool, picks: [], k: db.topK };
     gd().lastResult = null;
     view = 'compare';
     save(); render();
   }
 
-  // Load the next pair of runs to merge, if the current merge is finished.
-  function advance(s) {
-    if (!s.a.length && !s.b.length && s.queue.length >= 2) {
-      s.a = s.queue.shift();
-      s.b = s.queue.shift();
-      s.out = [];
-    }
-  }
-
-  function isFinished(s) { return s.queue.length === 1 && !s.a.length && !s.b.length; }
-
-  // Worst-case number of comparisons for the whole round.
-  function maxComparisons(n) {
-    const q = Array(n).fill(1);
-    let total = 0;
-    while (q.length > 1) {
-      const m = q.shift() + q.shift();
-      total += m - 1;
-      q.push(m);
-    }
-    return total;
+  function current() {
+    const s = gd().session;
+    return NameRound.step(s.pool, s.picks, s.k);
   }
 
   function choose(side) {
     const s = gd().session;
-    if (!s || isFinished(s)) return;
-    s.undo.push(JSON.stringify({ queue: s.queue, a: s.a, b: s.b, out: s.out, done: s.done }));
-    s.out.push(side === 'a' ? s.a.shift() : s.b.shift());
-    s.done++;
-    if (!s.a.length || !s.b.length) {
-      s.queue.push(s.out.concat(s.a, s.b));
-      s.a = []; s.b = []; s.out = [];
-      advance(s);
-    }
-    if (isFinished(s)) finishRound();
+    if (!s) return;
+    const m = current();
+    if (m.done) return;
+    s.picks.push(side === 'a' ? [m.a, m.b] : [m.b, m.a]);
+    const next = current();
+    if (next.done) finishRound(next);
     save(); render();
   }
 
@@ -171,8 +153,8 @@
 
   function undo() {
     const s = gd().session;
-    if (!s || !s.undo.length) return;
-    Object.assign(s, JSON.parse(s.undo.pop()));
+    if (!s || !s.picks.length) return;
+    s.picks.pop();
     save(); render();
   }
 
@@ -183,23 +165,25 @@
     save(); render();
   }
 
-  function finishRound() {
+  // Scores run from 1 (first) to 0 (last). Unordered groups get the average score of
+  // the positions they span.
+  function finishRound({ top, middle, retired }) {
     const g = gd();
-    const ranking = g.session.queue[0];
-    const n = ranking.length;
-    const cut = Math.floor(n * QUARTER);
-    const retiredNow = [];
-    ranking.forEach((name, i) => {
-      const score = n > 1 ? 1 - i / (n - 1) : 1;
+    const n = top.length + middle.length + retired.length;
+    const score = idx => (n > 1 ? 1 - idx / (n - 1) : 1);
+    const groupScore = (from, count) => score(from + (count - 1) / 2);
+    const record = (name, value, isTop) => {
       const st = g.stats[name] || (g.stats[name] = { seen: 0, total: 0, best: 0, tops: 0 });
       st.seen++;
-      st.total += score;
-      st.best = Math.max(st.best, score);
-      if (i < cut) st.tops++;
-      if (i >= n - cut) { g.retired[name] = true; retiredNow.push(name); }
-    });
+      st.total += value;
+      st.best = Math.max(st.best, value);
+      if (isTop) st.tops++;
+    };
+    top.forEach((name, i) => record(name, score(i), true));
+    middle.forEach(name => record(name, groupScore(top.length, middle.length), false));
+    retired.forEach(name => { record(name, groupScore(n - retired.length, retired.length), false); g.retired[name] = true; });
     g.rounds++;
-    g.lastResult = { ranking, cut, retiredNow, round: g.rounds };
+    g.lastResult = { top, middle, retiredNow: retired.slice(), round: g.rounds };
     g.session = null;
     view = 'results';
   }
@@ -274,30 +258,35 @@
   function renderHome() {
     const g = gd();
     const c = counts();
-    const favs = favorites().slice(0, 15);
+    // Only names that have made a round's top; the rest were never put in order.
+    const favs = favorites().filter(([, st]) => st.tops > 0).slice(0, 15);
     const retired = allNames().filter(n => g.retired[n]).sort();
     const label = db.gender === 'boy' ? 'boy' : 'girl';
 
     app.innerHTML = `
       <section class="card">
         <h2>Rank ${label} names</h2>
-        <p class="muted small">Pick your favorite of two names until the round is fully ranked.
-          The top quarter of each round carries into future rounds; the bottom quarter is retired.</p>
+        <p class="muted small">Pick your favorite of two names. Each round puts your top few in order;
+          they come back in future rounds. Names that lose their first two matchups are retired.</p>
         <div class="stats">
           <div class="stat"><b>${c.unseen}</b><span>unseen</span></div>
           <div class="stat"><b>${favorites().length}</b><span>in play</span></div>
           <div class="stat"><b>${c.retired}</b><span>retired</span></div>
         </div>
-        <div class="row" style="justify-content: space-between">
-          <div class="row">
-            <span class="small muted">Names per round</span>
-            <div class="segmented">
-              ${POOL_SIZES.map(n => `<button type="button" data-size="${n}" aria-pressed="${n === db.poolSize}">${n}</button>`).join('')}
-            </div>
+        <div class="settings">
+          <span class="small muted">Names per round</span>
+          <div class="segmented">
+            ${POOL_SIZES.map(n => `<button type="button" data-size="${n}" aria-pressed="${n === db.poolSize}">${n}</button>`).join('')}
           </div>
+          <span class="small muted">Rank the top</span>
+          <div class="segmented">
+            ${TOP_SIZES.map(n => `<button type="button" data-topk="${n}" aria-pressed="${n === db.topK}">${n}</button>`).join('')}
+          </div>
+        </div>
+        <div class="row" style="justify-content: space-between">
+          <span class="small muted">Up to ${NameRound.maxPicks(db.poolSize, db.topK)} picks</span>
           <button type="button" class="btn primary" data-action="start">Start round ${g.rounds + 1}</button>
         </div>
-        <p class="small muted" style="margin-bottom:0">Up to ${maxComparisons(db.poolSize)} picks.</p>
       </section>
 
       ${favs.length ? `
@@ -344,22 +333,23 @@
 
   function renderCompare() {
     const s = gd().session;
-    const max = maxComparisons(s.pool.length);
-    const pct = Math.min(100, Math.round((s.done / max) * 100));
+    const m = current();
+    const max = NameRound.maxPicks(s.pool.length, s.k);
+    const pct = Math.min(100, Math.round((s.picks.length / max) * 100));
     app.innerHTML = `
       <section>
         <div class="row" style="justify-content: space-between">
-          <span class="small muted">Pick ${s.done + 1} · at most ${max}</span>
+          <span class="small muted">Pick ${s.picks.length + 1} · at most ${max}</span>
           <span class="row">
-            <button type="button" class="btn link small" data-action="undo" ${s.undo.length ? '' : 'disabled'}>Undo</button>
+            <button type="button" class="btn link small" data-action="undo" ${s.picks.length ? '' : 'disabled'}>Undo</button>
             <button type="button" class="btn link small" data-action="abandon">Abandon</button>
           </span>
         </div>
         <div class="progress"><div style="width:${pct}%"></div></div>
         <div class="versus">
-          <button type="button" class="choice" data-choose="a">${esc(s.a[0])}</button>
+          <button type="button" class="choice" data-choose="a">${esc(m.a)}</button>
           <span class="or">or</span>
-          <button type="button" class="choice" data-choose="b">${esc(s.b[0])}</button>
+          <button type="button" class="choice" data-choose="b">${esc(m.b)}</button>
         </div>
         <p class="hint small muted">Keyboard: ← / → to pick, Backspace to undo</p>
       </section>
@@ -368,23 +358,32 @@
 
   function renderResults() {
     const r = gd().lastResult;
+    const middle = r.middle.slice().sort();
     app.innerHTML = `
       <section class="card">
-        <h2>Round ${r.round} results</h2>
+        <h2>Round ${r.round}: your top ${r.top.length}</h2>
         <ol class="ranking">
-          ${r.ranking.map((name, i) => {
-            const isCut = r.retiredNow.includes(name);
-            const isTop = i < r.cut;
-            return `
-            <li class="${isCut ? 'cut' : ''}">
+          ${r.top.map((name, i) => `
+            <li>
               <span class="pos">${i + 1}</span>
               <span class="name">${esc(name)}</span>
-              ${isTop ? '<span class="tag keep">carries forward</span>' : ''}
-              ${isCut ? `<span class="tag cut">retired</span><button type="button" class="btn link small" data-restore="${esc(name)}">keep</button>` : ''}
-            </li>`;
-          }).join('')}
+            </li>`).join('')}
         </ol>
       </section>
+      ${middle.length ? `
+      <section class="card">
+        <h2>Still in the running</h2>
+        <p class="small muted">Not ranked this round; they may come back later.</p>
+        <div class="retired-list">${middle.map(n => `<span class="chip plain">${esc(n)}</span>`).join('')}</div>
+      </section>` : ''}
+      ${r.retiredNow.length ? `
+      <section class="card">
+        <h2>Retired</h2>
+        <p class="small muted">Lost both of their matchups. Tap ↺ to keep one.</p>
+        <div class="retired-list">
+          ${r.retiredNow.map(n => `<span class="chip">${esc(n)}<button type="button" data-restore="${esc(n)}" title="Keep">↺</button></span>`).join('')}
+        </div>
+      </section>` : ''}
       <div class="row" style="justify-content: center">
         <button type="button" class="btn" data-action="home">See all favorites</button>
         <button type="button" class="btn primary" data-action="start">Next round</button>
@@ -407,9 +406,13 @@
     if (!t) return;
     if (t.dataset.choose) return pick(t);
     if (t.dataset.size) { db.poolSize = Number(t.dataset.size); save(); return render(); }
+    if (t.dataset.topk) { db.topK = Number(t.dataset.topk); save(); return render(); }
     if (t.dataset.restore) {
       const r = gd().lastResult;
-      if (r) r.retiredNow = r.retiredNow.filter(n => n !== t.dataset.restore);
+      if (r && r.retiredNow.includes(t.dataset.restore)) {
+        r.retiredNow = r.retiredNow.filter(n => n !== t.dataset.restore);
+        r.middle.push(t.dataset.restore);
+      }
       return restore(t.dataset.restore);
     }
     if (t.dataset.retire) return retire(t.dataset.retire);

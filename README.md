@@ -9,12 +9,14 @@ Small static web apps. No build step: open `index.html`, or serve the folder wit
 
 Ranks baby names through head-to-head "this or that" picks, with separate boy and girl lists.
 
-- Each round takes a pool of names (8–32) and sorts it with an interactive merge sort, so you get a
-  complete ranking in about n·log₂(n) picks (16 names: up to 49).
-- Your best names so far (by average finishing position) fill about a third of each new round, so
-  favorites keep getting tested against new names. The rest of the pool is names you haven't seen yet.
-- The bottom quarter of each round is retired and won't come back. You can restore retired names from
-  the results screen or the home screen.
+- Each round takes a pool of names (8–32) and puts only your top 3, 5 or 8 in order; the rest
+  aren't ranked. With 16 names and a top 5, that's at most 31 picks (a full sort took up to 49).
+- How: names are paired for a first matchup, and first-round losers face each other. Losing both,
+  without winning a later matchup, retires a name (up to a quarter of the pool). A knockout bracket
+  finds #1, then only names that lost to #1 play for #2, and so on. Logic is in `baby-names/round.js`.
+- Your best names so far fill about a third of each new round, so favorites keep getting tested
+  against new names. The rest of the pool is names you haven't seen yet.
+- Retired names won't come back unless you restore them from the results or home screen.
 - History is saved in the browser's localStorage, kept separately for boys and girls. Use
   Export/Import to back it up or move it to another device.
 - You can add your own names from inside the app.
