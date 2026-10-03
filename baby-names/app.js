@@ -66,7 +66,12 @@
     return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  function allNames() { return dedupe(BASE[db.gender].concat(gd().custom)); }
+  // History is keyed by name, so names you've ranked or retired stay in your list
+  // even if a regenerated names.js drops them.
+  function allNames() {
+    const g = gd();
+    return dedupe(BASE[db.gender].concat(g.custom, Object.keys(g.stats), Object.keys(g.retired)));
+  }
   function avg(stat) { return stat.seen ? stat.total / stat.seen : 0; }
 
   function favorites() {
@@ -152,6 +157,16 @@
     }
     if (isFinished(s)) finishRound();
     save(); render();
+  }
+
+  // Briefly highlight the chosen name so a tap visibly registers, and ignore
+  // further picks until the next pair is shown.
+  let picking = false;
+  function pick(btn) {
+    if (picking) return;
+    picking = true;
+    btn.classList.add('picked');
+    setTimeout(() => { picking = false; choose(btn.dataset.choose); }, 140);
   }
 
   function undo() {
@@ -293,7 +308,7 @@
             <li>
               <span class="pos">${i + 1}</span>
               <span class="name">${esc(name)}</span>
-              <span class="small muted">${st.seen} round${st.seen === 1 ? '' : 's'}</span>
+              <span class="small muted rounds">${st.seen} round${st.seen === 1 ? '' : 's'}</span>
               <span class="bar" title="Average ${Math.round(avg(st) * 100)}%"><div style="width:${Math.round(avg(st) * 100)}%"></div></span>
               <button type="button" class="btn link small" data-retire="${esc(name)}" title="Retire">✕</button>
             </li>`).join('')}
@@ -390,7 +405,7 @@
   app.addEventListener('click', e => {
     const t = e.target.closest('button');
     if (!t) return;
-    if (t.dataset.choose) return choose(t.dataset.choose);
+    if (t.dataset.choose) return pick(t);
     if (t.dataset.size) { db.poolSize = Number(t.dataset.size); save(); return render(); }
     if (t.dataset.restore) {
       const r = gd().lastResult;
@@ -420,8 +435,8 @@
 
   document.addEventListener('keydown', e => {
     if (view !== 'compare' || e.target.matches('input')) return;
-    if (e.key === 'ArrowLeft') choose('a');
-    else if (e.key === 'ArrowRight') choose('b');
+    if (e.key === 'ArrowLeft') pick(app.querySelector('[data-choose=a]'));
+    else if (e.key === 'ArrowRight') pick(app.querySelector('[data-choose=b]'));
     else if (e.key === 'Backspace' || (e.key === 'z' && (e.metaKey || e.ctrlKey))) { e.preventDefault(); undo(); }
   });
 
