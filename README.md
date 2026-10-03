@@ -29,3 +29,15 @@ download the "National data" `names.zip` in a browser (SSA blocks scripted downl
     python3 baby-names/scripts/build_names.py ~/Downloads/names.zip
 
 Options: `--years` (how many recent years to total, default 5) and `--top` (names per sex, default 1000).
+
+### [Threes](threes/)
+
+A self-hosted version of the Threes sliding-tile puzzle.
+
+- Swipe (or use the arrow keys / WASD) to move every tile one space. 1 + 2 makes 3; equal tiles of 3 or
+  more merge into their sum. The next tile enters from the edge you swiped away from.
+- Next tiles come from a shuffled deck of four 1s, four 2s and four 3s. Once you have a 48, an occasional
+  bonus tile (shown as "+") can appear.
+- When no move is possible, each tile of 3 or more scores 3^(log2(value / 3) + 1).
+- Your game in progress and best score are saved in the browser.
+- Game rules live in `threes/game.js` with no DOM code, so they can be tested in Node.

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f1e8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1b1a19" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Threes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Threes</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="game" id="game">
+    <header class="top">
+      <h1>Threes</h1>
+      <div class="scores">
+        <div class="score"><span>Score</span><b id="score">0</b></div>
+        <div class="score"><span>Best</span><b id="best">0</b></div>
+      </div>
+    </header>
+
+    <div class="next">
+      <span>Next</span>
+      <div class="next-card" id="next"></div>
+    </div>
+
+    <div class="board" id="board">
+      <div class="slots"></div>
+      <div class="tiles" id="tiles"></div>
+      <div class="overlay" id="overlay" hidden>
+        <h2>Out of moves</h2>
+        <p class="final" id="final"></p>
+        <p class="detail" id="detail"></p>
+        <button type="button" class="btn primary" data-action="new">Play again</button>
+      </div>
+    </div>
+
+    <footer class="bottom">
+      <button type="button" class="btn" data-action="new">New game</button>
+      <span class="hint">Swipe or use arrow keys</span>
+    </footer>
+  </div>
+
+  <script src="game.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
