@@ -5,8 +5,11 @@
   const POOL_SIZES = [8, 16, 24, 32];
   // How many of each round's names get put in order.
   const TOP_SIZES = [3, 5, 8];
-  // Share of a new round reserved for past favorites.
-  const FAVORITE_SHARE = 1 / 3;
+  // Share of a new round reserved for names you've seen before: half from your top
+  // FAVORITE_POOL favorites (the "Favorites so far" list), least-tested first, and half
+  // at random from the rest of the names still in the running.
+  const RETURNING_SHARE = 1 / 4;
+  const FAVORITE_POOL = 15;
 
   const BASE = {
     boy: dedupe(window.BASE_NAMES.boy.split(/\s+/)),
@@ -73,17 +76,21 @@
 
   // History is keyed by name, so names you've ranked or retired stay in your list
   // even if a regenerated names.js drops them.
-  function allNames() {
-    const g = gd();
-    return dedupe(BASE[db.gender].concat(g.custom, Object.keys(g.stats), Object.keys(g.retired)));
+  function allNames(gender = db.gender) {
+    const g = db.data[gender];
+    return dedupe(BASE[gender].concat(g.custom, Object.keys(g.stats), Object.keys(g.retired)));
   }
   function avg(stat) { return stat.seen ? stat.total / stat.seen : 0; }
 
-  function favorites() {
-    const g = gd();
+  function favorites(g = gd()) {
     return Object.entries(g.stats)
       .filter(([name]) => !g.retired[name])
       .sort((a, b) => avg(b[1]) - avg(a[1]) || b[1].seen - a[1].seen);
+  }
+
+  // Names that have made a round's top, best first, as shown under "Favorites so far".
+  function topNames(g = gd()) {
+    return favorites(g).filter(([, st]) => st.tops > 0).map(([n]) => n);
   }
 
   function counts() {
@@ -99,12 +106,20 @@
   function buildPool(size) {
     const g = gd();
     const eligible = allNames().filter(n => !g.retired[n]);
-    const favs = favorites().filter(([, s]) => avg(s) >= 0.5).map(([n]) => n);
-    const pool = favs.slice(0, Math.round(size * FAVORITE_SHARE));
+    const favs = topNames().slice(0, FAVORITE_POOL);
+    const favSet = new Set(favs);
+    const running = favorites().map(([n]) => n).filter(n => !favSet.has(n));
+    const half = Math.round((size * RETURNING_SHARE) / 2);
+    // Favorites with the fewest rounds behind their score come back first; ties are random.
+    const leastTested = shuffle(favs).sort((a, b) => g.stats[a].seen - g.stats[b].seen);
+    const pool = leastTested.slice(0, half).concat(shuffle(running).slice(0, half));
     const inPool = new Set(pool);
 
-    // Fill with names never seen before, then with previously-seen middling names.
-    for (const n of shuffle(eligible.filter(n => !g.stats[n]))) {
+    // Fill with names never seen before (added names first), then with previously-seen
+    // middling names.
+    const unseen = shuffle(eligible.filter(n => !g.stats[n]));
+    const custom = new Set(g.custom);
+    for (const n of unseen.filter(n => custom.has(n)).concat(unseen.filter(n => !custom.has(n)))) {
       if (pool.length >= size) break;
       pool.push(n); inPool.add(n);
     }
@@ -135,7 +150,7 @@
     if (!s) return;
     const m = current();
     if (m.done) return;
-    s.picks.push(side === 'a' ? [m.a, m.b] : [m.b, m.a]);
+    s.picks.push(side === 'neither' ? { neither: [m.a, m.b] } : side === 'a' ? [m.a, m.b] : [m.b, m.a]);
     const next = current();
     if (next.done) finishRound(next);
     save(); render();
@@ -241,6 +256,93 @@
     }).catch(() => alert('That file doesn’t look like a Name Ranker export.'));
   }
 
+  // ---------- Comparing with someone else ----------
+
+  // Loads someone else's export without touching your history: their added names join
+  // your list, and a snapshot of their favorites is kept for the comparison table.
+  function importPartner(file) {
+    file.text().then(text => {
+      const data = JSON.parse(text);
+      if (!data || !data.data || !data.data.boy || !data.data.girl) throw new Error('bad file');
+      const label = (prompt('Whose results are these?', db.partner ? db.partner.label : '') || '').trim();
+      if (!label) return;
+      const added = [];
+      db.partner = { label };
+      for (const gender of ['boy', 'girl']) {
+        const theirs = { ...emptyGenderData(), ...data.data[gender] };
+        const known = new Set(allNames(gender).map(n => n.toLowerCase()));
+        const fresh = dedupe(theirs.custom).filter(n => !known.has(n.toLowerCase()));
+        db.data[gender].custom.push(...fresh);
+        if (fresh.length) added.push(`${fresh.length} ${gender} name${fresh.length === 1 ? '' : 's'}`);
+        db.partner[gender] = {
+          favorites: topNames(theirs),
+          retired: Object.keys(theirs.retired),
+          seen: Object.keys(theirs.stats),
+        };
+      }
+      save(); render();
+      if (added.length) alert(`Added ${added.join(' and ')} from ${label}. They'll come up in your next rounds.`);
+    }).catch(() => alert('That file doesn’t look like a Name Ranker export.'));
+  }
+
+  function removePartner() {
+    if (!confirm(`Remove ${db.partner.label}’s results? Names they added stay in your list.`)) return;
+    db.partner = null;
+    save(); render();
+  }
+
+  // Your favorites next to theirs: names you both have in your favorites first (by
+  // combined rank), then everyone else's top 15 by best rank.
+  function comparisonRows() {
+    const g = gd();
+    const p = db.partner[db.gender];
+    const sides = [
+      { favs: topNames(), retired: new Set(Object.keys(g.retired)), seen: new Set(Object.keys(g.stats)) },
+      { favs: p.favorites, retired: new Set(p.retired), seen: new Set(p.seen) },
+    ];
+    const standing = (side, name) => {
+      const i = side.favs.indexOf(name);
+      if (i >= 0) return { rank: i + 1, text: `#${i + 1}` };
+      return { text: side.retired.has(name) ? 'retired' : side.seen.has(name) ? 'in the running' : 'not seen' };
+    };
+    const names = dedupe(sides[0].favs.slice(0, 15).concat(sides[1].favs.slice(0, 15)));
+    return names.map(name => {
+      const [you, them] = sides.map(side => standing(side, name));
+      return { name, you, them, both: Boolean(you.rank && them.rank) };
+    }).sort((a, b) =>
+      (b.both - a.both) ||
+      (a.both ? a.you.rank + a.them.rank - b.you.rank - b.them.rank : 0) ||
+      Math.min(a.you.rank || Infinity, a.them.rank || Infinity) - Math.min(b.you.rank || Infinity, b.them.rank || Infinity));
+  }
+
+  function renderPartner(label) {
+    const partnerFile = text => `<label class="btn small">${text}<input type="file" accept="application/json" data-action="import-partner" hidden></label>`;
+    if (!db.partner) return `
+      <section class="card">
+        <h2>Compare with someone</h2>
+        <p class="small muted">Ask them to tap Export history and send you the file. Names they've added join
+          your list, and you'll see your favorites side by side. Your own history isn't changed.</p>
+        ${partnerFile('Choose their file')}
+      </section>`;
+    const rows = comparisonRows();
+    const cell = st => `<td class="${st.rank ? 'rank' : 'muted small'}">${st.text}</td>`;
+    return `
+      <section class="card">
+        <h2>You & ${esc(db.partner.label)}</h2>
+        ${rows.length ? `
+        <table class="compare">
+          <thead><tr><th>Name</th><th>You</th><th>${esc(db.partner.label)}</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `<tr class="${r.both ? 'both' : ''}"><td>${esc(r.name)}</td>${cell(r.you)}${cell(r.them)}</tr>`).join('')}
+          </tbody>
+        </table>` : `<p class="small muted">Neither of you has favorite ${label} names yet.</p>`}
+        <div class="row">
+          ${partnerFile('Load a newer file')}
+          <button type="button" class="btn link small" data-action="remove-partner">Remove</button>
+        </div>
+      </section>`;
+  }
+
   // ---------- Rendering ----------
 
   const app = document.getElementById('app');
@@ -259,7 +361,7 @@
     const g = gd();
     const c = counts();
     // Only names that have made a round's top; the rest were never put in order.
-    const favs = favorites().filter(([, st]) => st.tops > 0).slice(0, 15);
+    const favs = favorites().filter(([, st]) => st.tops > 0).slice(0, FAVORITE_POOL);
     const retired = allNames().filter(n => g.retired[n]).sort();
     const label = db.gender === 'boy' ? 'boy' : 'girl';
 
@@ -304,13 +406,15 @@
         </ol>
       </section>` : ''}
 
+      ${renderPartner(label)}
+
       <section class="card">
         <h2>Add a name</h2>
         <form class="row" data-form="add">
           <input type="text" name="name" placeholder="A name you love that isn’t on the list" autocomplete="off">
           <button type="submit" class="btn">Add</button>
         </form>
-        ${g.custom.length ? `<p class="small muted" style="margin-bottom:0">Your additions: ${g.custom.map(esc).join(', ')}</p>` : ''}
+        ${g.custom.length ? `<p class="small muted" style="margin-bottom:0">Added names: ${g.custom.map(esc).join(', ')}</p>` : ''}
       </section>
 
       ${retired.length ? `
@@ -325,7 +429,7 @@
 
       <footer class="tools">
         <button type="button" class="btn small" data-action="export">Export history</button>
-        <label class="btn small">Import<input type="file" accept="application/json" data-action="import" hidden></label>
+        <label class="btn small">Restore backup<input type="file" accept="application/json" data-action="import" hidden></label>
         <button type="button" class="btn small" data-action="reset">Reset ${label} history</button>
       </footer>
     `;
@@ -351,7 +455,10 @@
           <span class="or">or</span>
           <button type="button" class="choice" data-choose="b">${esc(m.b)}</button>
         </div>
-        <p class="hint small muted">Keyboard: ← / → to pick, Backspace to undo</p>
+        <div class="row neither-row">
+          <button type="button" class="btn" data-choose="neither">Neither — retire both</button>
+        </div>
+        <p class="hint small muted">Keyboard: ← / → to pick, ↓ for neither, Backspace to undo</p>
       </section>
     `;
   }
@@ -361,7 +468,7 @@
     const middle = r.middle.slice().sort();
     app.innerHTML = `
       <section class="card">
-        <h2>Round ${r.round}: your top ${r.top.length}</h2>
+        <h2>Round ${r.round}: ${r.top.length ? `your top ${r.top.length}` : 'no favorites this round'}</h2>
         <ol class="ranking">
           ${r.top.map((name, i) => `
             <li>
@@ -373,13 +480,15 @@
       ${middle.length ? `
       <section class="card">
         <h2>Still in the running</h2>
-        <p class="small muted">Not ranked this round; they may come back later.</p>
-        <div class="retired-list">${middle.map(n => `<span class="chip plain">${esc(n)}</span>`).join('')}</div>
+        <p class="small muted">Not ranked this round; they may come back later. Tap ✕ to retire one.</p>
+        <div class="retired-list">
+          ${middle.map(n => `<span class="chip">${esc(n)}<button type="button" data-retire="${esc(n)}" title="Retire">✕</button></span>`).join('')}
+        </div>
       </section>` : ''}
       ${r.retiredNow.length ? `
       <section class="card">
         <h2>Retired</h2>
-        <p class="small muted">Lost both of their matchups. Tap ↺ to keep one.</p>
+        <p class="small muted">Won't come back in later rounds. Tap ↺ to keep one.</p>
         <div class="retired-list">
           ${r.retiredNow.map(n => `<span class="chip">${esc(n)}<button type="button" data-restore="${esc(n)}" title="Keep">↺</button></span>`).join('')}
         </div>
@@ -415,7 +524,14 @@
       }
       return restore(t.dataset.restore);
     }
-    if (t.dataset.retire) return retire(t.dataset.retire);
+    if (t.dataset.retire) {
+      const r = gd().lastResult;
+      if (r && r.middle.includes(t.dataset.retire)) {
+        r.middle = r.middle.filter(n => n !== t.dataset.retire);
+        r.retiredNow.push(t.dataset.retire);
+      }
+      return retire(t.dataset.retire);
+    }
     switch (t.dataset.action) {
       case 'start': return startRound();
       case 'undo': return undo();
@@ -423,11 +539,13 @@
       case 'home': view = 'home'; return render();
       case 'export': return exportData();
       case 'reset': return resetGender();
+      case 'remove-partner': return removePartner();
     }
   });
 
   app.addEventListener('change', e => {
     if (e.target.dataset.action === 'import' && e.target.files[0]) importData(e.target.files[0]);
+    if (e.target.dataset.action === 'import-partner' && e.target.files[0]) importPartner(e.target.files[0]);
   });
 
   app.addEventListener('submit', e => {
@@ -440,6 +558,7 @@
     if (view !== 'compare' || e.target.matches('input')) return;
     if (e.key === 'ArrowLeft') pick(app.querySelector('[data-choose=a]'));
     else if (e.key === 'ArrowRight') pick(app.querySelector('[data-choose=b]'));
+    else if (e.key === 'ArrowDown') { e.preventDefault(); pick(app.querySelector('[data-choose=neither]')); }
     else if (e.key === 'Backspace' || (e.key === 'z' && (e.metaKey || e.ctrlKey))) { e.preventDefault(); undo(); }
   });
 
