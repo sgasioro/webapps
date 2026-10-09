@@ -9,9 +9,12 @@
 //   replayed; earlier results are reused, so only names that lost to #1 play again for #2.
 //   Repeat until the top K are known.
 // - Everyone else is "still in the running", unordered.
+// - Picking "neither" puts both names out: they lose to everyone else without asking,
+//   and are retired at the end (on top of the quarter-of-the-pool limit).
 //
-// A round in progress is just { pool, picks: [[winner, loser], ...] }. The next matchup is
-// found by replaying the algorithm against the picks so far, so undo is dropping a pick.
+// A round in progress is just { pool, picks: [[winner, loser] or { neither: [a, b] }, ...] }.
+// The next matchup is found by replaying the algorithm against the picks so far, so undo
+// is dropping a pick.
 (function (root) {
   'use strict';
 
@@ -24,8 +27,12 @@
   // Returns { done: false, a, b } for the next matchup, or
   // { done: true, top, middle, retired } once the round is decided.
   function step(pool, picks, k) {
-    const winners = new Map(picks.map(([w, l]) => [pairKey(w, l), w]));
+    const rejected = new Set(picks.flatMap(p => p.neither || []));
+    const pairs = picks.filter(p => !p.neither);
+    const winners = new Map(pairs.map(([w, l]) => [pairKey(w, l), w]));
     const better = (a, b) => {
+      // Rejected names lose without a matchup; between two, the first goes through.
+      if (rejected.has(a) || rejected.has(b)) return rejected.has(a) && !rejected.has(b) ? b : a;
       const w = winners.get(pairKey(a, b));
       if (w === undefined) throw new NeedPick(a, b);
       return w;
@@ -42,7 +49,7 @@
       // Knockout bracket with fixed slots; placed names leave an empty slot (a bye).
       const slots = pool.slice();
       const top = [];
-      while (top.length < Math.min(k, pool.length)) {
+      while (top.length < Math.min(k, pool.length - rejected.size)) {
         let round = slots;
         while (round.length > 1) {
           const next = [];
@@ -58,8 +65,9 @@
 
       // A name that lost twice but later won a bracket matchup (or made the top) is spared.
       const placed = new Set(top);
-      const wonOnce = new Set(picks.map(([w]) => w));
-      const out = retired.filter(n => !placed.has(n) && !wonOnce.has(n));
+      const wonOnce = new Set(pairs.map(([w]) => w));
+      const out = retired.filter(n => !placed.has(n) && !wonOnce.has(n) && !rejected.has(n))
+        .concat(pool.filter(n => rejected.has(n)));
       const outSet = new Set(out);
       return { done: true, top, middle: pool.filter(n => !placed.has(n) && !outSet.has(n)), retired: out };
     } catch (e) {

@@ -14,12 +14,23 @@ Ranks baby names through head-to-head "this or that" picks, with separate boy an
 - How: names are paired for a first matchup, and first-round losers face each other. Losing both,
   without winning a later matchup, retires a name (up to a quarter of the pool). A knockout bracket
   finds #1, then only names that lost to #1 play for #2, and so on. Logic is in `baby-names/round.js`.
-- Your best names so far fill about a third of each new round, so favorites keep getting tested
-  against new names. The rest of the pool is names you haven't seen yet.
+- About a quarter of each new round is names you've seen before: half from your top 15 favorites
+  (the ones ranked in the fewest rounds come back first, so a single lucky win gets re-tested) and
+  half at random from names still in the running. Favorites keep getting tested against new names,
+  and in-the-running names get another chance, without the same few coming back every time. The
+  rest of the pool is names you haven't seen yet.
+- Tap "Neither" (or press ↓) when you don't like either name: both are out of the round and retired
+  when it ends, without counting toward the quarter.
+- From the results screen you can also retire any name that's still in the running.
 - Retired names won't come back unless you restore them from the results or home screen.
 - History is saved in the browser's localStorage, kept separately for boys and girls. Use
-  Export/Import to back it up or move it to another device.
-- You can add your own names from inside the app.
+  Export history / Restore backup to back it up or move it to another device (restoring replaces
+  everything on that device).
+- To rank names with someone on another device, load their export under "Compare with someone".
+  Your history isn't changed: names they added join your list, and your favorites are shown side
+  by side with theirs, names you both like first.
+- You can add your own names from inside the app. Added names you haven't seen yet go into
+  your next rounds first.
 
 #### Name data
 
